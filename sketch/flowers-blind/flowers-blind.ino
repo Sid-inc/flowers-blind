@@ -30,8 +30,8 @@ float targetPositionStepper2 = 0;                     // Целевое поло
 
 Button settingButton(BTN_PIN);                        // Кнопка настройки.
 
-GStepper<STEPPER4WIRE> stepper1(2048, 11, 9, 10, 8);  // Моторы с драйвером ULN2003 подключается по порядку пинов, но крайние нужно поменять местами
-GStepper<STEPPER4WIRE> stepper2(2048, 7, 5, 6, 4);    // подключено D2-IN1, D3-IN2, D4-IN3, D5-IN4, но в программе 5 и 2 меняются местами.
+GStepper<STEPPER4WIRE> stepper1(2048, 12, 10, 11, 9);  // Моторы с драйвером ULN2003 подключается по порядку пинов, но крайние нужно поменять местами
+GStepper<STEPPER4WIRE> stepper2(2048, 8, 6, 7, 5);    // подключено D2-IN1, D3-IN2, D4-IN3, D5-IN4, но в программе 5 и 2 меняются местами.
 
 void setup() {
   // Начало инициализации.
@@ -184,9 +184,9 @@ void setupStepper1() {
     stepper1.setRunMode(KEEP_SPEED);
 
     if (setupRotationDirection) {
-      stepper1.setSpeedDeg(400);
+      stepper1.setSpeedDeg(100);
     } else {
-      stepper1.setSpeedDeg(-400);
+      stepper1.setSpeedDeg(-100);
     }
   } else {
     log("stepper 1 stop");
@@ -207,9 +207,9 @@ void setupStepper2() {
     stepper2.setRunMode(KEEP_SPEED);
 
     if (setupRotationDirection) {
-      stepper2.setSpeedDeg(400);
+      stepper2.setSpeedDeg(100);
     } else {
-      stepper2.setSpeedDeg(-400);
+      stepper2.setSpeedDeg(-100);
     }
   } else {
     log("stepper 2 stop");
