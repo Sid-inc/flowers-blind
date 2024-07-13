@@ -1,6 +1,8 @@
 #include <EncButton.h>                                // Библиотека для работы с кнопкой.
 #include <GyverStepper.h>                             // Библиотека для работы с шаговыми двигателями.
 #include <EEPROM.h>                                   // Библиотека для работы с EEPROM памятью.
+#include <Wire.h>                                     // Библиотека Wire (для работы с шиной I2C).
+#include <BH1750.h>                                   // Библиотека для датчика освещенности bh1750.
 
 // Настройка работы.
 const uint8_t BTN_PIN = 2;                            // Пин к которому подключена кнопка (второй вывод кнопки подключен к GND).
@@ -11,6 +13,10 @@ const uint32_t ledStepInterval = 150;                 // Интервал миг
 
 const uint8_t STEPPER1_EEPROM_ADDR = 0;               // Адрес для сохранения в EEPROM целевого положения первого мотора.
 const uint8_t STEPPER2_EEPROM_ADDR = 4;               // Адрес для сохранения в EEPROM целевого положения второго мотора.
+
+const float LIGHT_TRESHOLD = 35000;                   // Пороговая яркость, на которой срабатывает активация штор.
+const uint32_t DELAY_TO_ACTIVATE = 10000;             // Частота проверки яркости в милисекундах для активации шторы.
+const uint32_t DELAY_TO_DEACTIVATE = 30000;           // Частота проверки яркости в милисекундах для деактивации шторы.
 
 // Сервисные переменные.
 uint8_t settingMode = 0;                              // Режим калибровки штор. (0 - выключен, 1 - калибровка первой шторы, 2 - калибровка второй шторы).
@@ -28,9 +34,17 @@ float setupStepperMinPosition = 0;                    // Нижнее калиб
 float targetPositionStepper1 = 0;                     // Целевое положение первого мотора.
 float targetPositionStepper2 = 0;                     // Целевое положение второго мотора.
 
-Button settingButton(BTN_PIN);                        // Кнопка настройки.
+int lowLightCollector = 0;                            // Счетчик количества обнаружений снижения яркости прежде чем деактивировать штору (стартовое значение 0).
+int lowLightCollectorLimit = 30;                      // Значение счетчика при котором будет деактивирована штора (DELAY_TO_DEACTIVATE * lowLightCollectorLimit = количество секунд через которое будет деактивирована штора,
+                                                      // если в процессе увеличения счетчика освещённость не вернётся на высокий уровень, то счетчик сбрасывается на начальное значение).
+uint32_t checkTime = DELAY_TO_ACTIVATE;               // Текущая частота проверки яркости.
+bool blindPosition = false;                           // Положение занавески. true - поднята, false - опущена.
+uint32_t lightMeterMillis = 0;                        // Переменная для задержки проверки освещенности.
 
-GStepper<STEPPER4WIRE> stepper1(2048, 12, 10, 11, 9);  // Моторы с драйвером ULN2003 подключается по порядку пинов, но крайние нужно поменять местами
+Button settingButton(BTN_PIN);                        // Кнопка настройки.
+BH1750 lightMeter;                                    // Датчик освещенности.
+
+GStepper<STEPPER4WIRE> stepper1(2048, 12, 10, 11, 9); // Моторы с драйвером ULN2003 подключается по порядку пинов, но крайние нужно поменять местами
 GStepper<STEPPER4WIRE> stepper2(2048, 8, 6, 7, 5);    // подключено D2-IN1, D3-IN2, D4-IN3, D5-IN4, но в программе 5 и 2 меняются местами.
 
 void setup() {
@@ -44,6 +58,10 @@ void setup() {
 
   log("Init button");
   settingButton.setHoldTimeout(HOLD_TIME_OUT);
+
+  log("Init lightmeter");
+  Wire.begin(); // Инициализируем шину I2C (библиотека BH1750 не делает это автоматически).
+  lightMeter.begin(); // Инициализируем и запускаем BH1750.
 
   log("Init stepper 1");
   stepper1.autoPower(true);  // Отключать мотор при достижении цели.
@@ -72,6 +90,11 @@ void loop() {
 
     if (settingButton.click()) {
       setupStepperRotater();
+    }
+  } else {
+    if (millis() - lightMeterMillis > checkTime) {
+      lightMeterMillis = millis();
+      checkLight();
     }
   }
 }
@@ -167,7 +190,7 @@ void changeLedState() {
   }
 }
 
-// Калибровочное вращение мотора.
+// Калибровочное вращение моторов.
 void setupStepperRotater() {
   if (settingMode == 1) {
     setupStepper1();
@@ -178,6 +201,7 @@ void setupStepperRotater() {
   }
 }
 
+// Калибровочное вращение мотора 1.
 void setupStepper1() {
   if (!stepper1.getState()) {
     log("start 1 rotate");
@@ -201,6 +225,7 @@ void setupStepper1() {
   }
 }
 
+// Калибровочное вращение мотора 2.
 void setupStepper2() {
   if (!stepper2.getState()) {
     log("start 2 rotate");
@@ -221,5 +246,70 @@ void setupStepper2() {
 
     stepper2.brake();
     setupRotationDirection = !setupRotationDirection;
+  }
+}
+
+// Проверка текущей яркости
+void checkLight() {
+  log("Check light");
+  float lux = lightMeter.readLightLevel();
+  if (debugMode) {
+    Serial.print("Light: ");
+    Serial.println(lux);
+  }
+
+   if (!stepper1.tick() && !stepper2.tick()) {
+    if (lux > LIGHT_TRESHOLD) {
+      lowLightCollector = 0; // Обнуляем счетчик понижений яркости
+      log(lowLightCollector);
+      log("lux more than threshold, reset lowLightCollector");
+      
+      if(!blindPosition) {
+        log("Current light more than lightThreshold, and ,blind in bottom - move to top");
+        blindPosition = true;
+        checkTime = DELAY_TO_DEACTIVATE;
+        BlindsActivate();
+      }
+    }
+  
+    if (blindPosition && lux < LIGHT_TRESHOLD) {
+      lowLightCollector++; // Увеличиваем счетчик понижений яркости
+      log("lux less than threshold, up lowLightCollector: ");
+      log(lowLightCollector);
+      
+      if(lowLightCollector > lowLightCollectorLimit) {
+        log("Current light less than lightThreshold, and ,blind in top - move to bottom");
+        blindPosition = false;
+        checkTime = DELAY_TO_ACTIVATE;
+        BlindsDeactivate();
+        lowLightCollector = 0;
+      }
+    }
+  }
+}
+
+// Активировать шторы.
+void BlindsActivate() {
+  if (!stepper1.tick()) {
+    log("Rotate");
+    stepper1.setTargetDeg(targetPositionStepper1);
+  }
+
+  if (!stepper2.tick()) {
+    log("Rotate2");
+    stepper2.setTargetDeg(targetPositionStepper2);
+  }
+}
+
+// Деактивировать шторы.
+void BlindsDeactivate() {
+  if (!stepper1.tick()) {
+    log("Rotate");
+    stepper1.setTargetDeg(0);        // Целевая позиция в градусах
+  }
+
+  if (!stepper2.tick()) {
+    log("Rotate2");
+    stepper2.setTargetDeg(0);        // Целевая позиция в градусах
   }
 }
